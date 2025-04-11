@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Биржевой анализатор — О3 ПРО</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #1e1e1e;
+      color: #f0f0f0;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #00ffc3;
+    }
+    #form {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    input {
+      padding: 10px;
+      font-size: 16px;
+      margin-right: 10px;
+      border-radius: 4px;
+      border: 1px solid #555;
+      background: #333;
+      color: #f0f0f0;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #00ffc3;
+      border: none;
+      border-radius: 4px;
+      color: #000;
+      font-weight: bold;
+    }
+    #output {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #2b2b2b;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 15px rgba(0,255,200,0.2);
+    }
+    .price-up {
+      color: #00ff80;
+    }
+    .price-down {
+      color: #ff4444;
+    }
+    canvas {
+      display: block;
+      margin: 40px auto 0;
+      background: #121212;
+      border: 1px solid #00ffc3;
+    }
+  </style>
+</head>
+<body>
+  <h1>Биржевой анализатор — О3 ПРО</h1>
+  <div id="form">
+    <input type="text" id="symbol" placeholder="Введите тикер, например: AAPL" />
+    <button onclick="analyzeStock()">Анализировать</button>
+  </div>
+  <div id="output">
+    <p><strong>Результаты анализа появятся здесь.</strong></p>
+  </div>
+
+  <canvas id="chart" width="600" height="300"></canvas>
+
+  <script>
+    const ctx = document.getElementById('chart').getContext('2d');
+
+    function drawChart(data) {
+      ctx.clearRect(0, 0, 600, 300);
+      ctx.strokeStyle = '#00ffc3';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      data.forEach((val, i) => {
+        const x = i * (600 / data.length);
+        const y = 300 - (val - Math.min(...data)) / (Math.max(...data) - Math.min(...data)) * 280;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    function calculateSMA(data, period) {
+      return data.map((_, i) => i >= period - 1
+        ? data.slice(i - period + 1, i + 1).reduce((sum, val) => sum + val, 0) / period
+        : null
+      ).filter(val => val !== null);
+    }
+
+    function calculateRSI(data, period = 14) {
+      let gains = 0, losses = 0;
+      for (let i = 1; i <= period; i++) {
+        const diff = data[i] - data[i - 1];
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+      }
+      let avgGain = gains / period;
+      let avgLoss = losses / period;
+      const rsiArray = [];
+      for (let i = period + 1; i < data.length; i++) {
+        const diff = data[i] - data[i - 1];
+        if (diff >= 0) {
+          avgGain = (avgGain * (period - 1) + diff) / period;
+          avgLoss = (avgLoss * (period - 1)) / period;
+        } else {
+          avgGain = (avgGain * (period - 1)) / period;
+          avgLoss = (avgLoss * (period - 1) - diff) / period;
+        }
+        const rs = avgGain / (avgLoss || 1);
+        rsiArray.push(100 - 100 / (1 + rs));
+      }
+      return rsiArray;
+    }
+
+    function drawSMA(sma, offset, color) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      sma.forEach((val, i) => {
+        const x = (i + offset) * (600 / (sma.length + offset));
+        const y = 300 - (val - Math.min(...sma)) / (Math.max(...sma) - Math.min(...sma)) * 280;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    function analyzeStock() {
+      const symbol = document.getElementById("symbol").value.toUpperCase();
+      const output = document.getElementById("output");
+
+      if (!symbol) {
+        output.innerHTML = '<p style="color:#ff7777;">Введите тикер акции.</p>';
+        return;
+      }
+
+      fetch(`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=ZSAR7BXOPLTFA40A`)
+        .then(response => response.json())
+        .then(data => {
+          const timeSeries = data["Time Series (Daily)"];
+          if (!timeSeries) {
+            output.innerHTML = `<p style='color:red;'>Ошибка загрузки данных по тикеру <strong>${symbol}</strong>.</p>`;
+            ctx.clearRect(0, 0, 600, 300);
+            return;
+          }
+
+          const prices = Object.values(timeSeries).slice(0, 100).reverse().map(d => parseFloat(d["4. close"]));
+          const latest = Object.entries(timeSeries)[0];
+          const previous = Object.entries(timeSeries)[1];
+          const currentPrice = parseFloat(latest[1]["4. close"]);
+          const previousPrice = parseFloat(previous[1]["4. close"]);
+          const change = ((currentPrice - previousPrice) / previousPrice * 100).toFixed(2);
+          const up = currentPrice >= previousPrice;
+
+          const sma20 = calculateSMA(prices, 20);
+          const sma50 = calculateSMA(prices, 50);
+          const rsi = calculateRSI(prices);
+          const lastRSI = rsi[rsi.length - 1].toFixed(2);
+
+          output.innerHTML = `
+            <h2>${symbol}</h2>
+            <p><strong>Цена:</strong> $${currentPrice.toFixed(2)}</p>
+            <p><strong>Изменение:</strong> <span class="${up ? 'price-up' : 'price-down'}">${change > 0 ? '+' : ''}${change}%</span></p>
+            <p><strong>Индикаторы:</strong> SMA20 (фиолетовый), SMA50 (жёлтый), RSI = ${lastRSI}</p>
+            <p><strong>Источник:</strong> Alpha Vantage</p>
+          `;
+
+          drawChart(prices);
+          drawSMA(sma20, prices.length - sma20.length, '#cc66ff');
+          drawSMA(sma50, prices.length - sma50.length, '#ffff66');
+        })
+        .catch(err => {
+          output.innerHTML = `<p style='color:red;'>Ошибка запроса данных.</p>`;
+          ctx.clearRect(0, 0, 600, 300);
+        });
+    }
+  </script>
+</body>
+</html>
